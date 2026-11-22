@@ -1,0 +1,11 @@
+# Compiled binaries & build artifacts
+build/
+*.o
+*.out
+*.dylib
+*.a
+head_to_head_bench
+industry_grade_verification
+
+# macOS
+.DS_Store
