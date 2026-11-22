@@ -16,6 +16,22 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
+
+
+class TokenShardDataset(Dataset):
+    def __init__(self, bin_path: Path, seq_len: int, total_samples: int):
+        self.data = np.fromfile(bin_path, dtype=np.uint16)
+        self.seq_len = seq_len
+        self.total_samples = total_samples
+        self.max_start = len(self.data) - (seq_len + 1)
+
+    def __len__(self):
+        return self.total_samples
+
+    def __getitem__(self, idx):
+        start = (idx * 2654435761) % self.max_start
+        return torch.from_numpy(self.data[start : start + self.seq_len + 1].astype(np.int64))
 
 
 def build_token_lib() -> Path:
@@ -85,6 +101,7 @@ def main():
     parser.add_argument("--steps", type=int, default=500)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--seq-len", type=int, default=128)
+    parser.add_argument("--compare", action="store_true", help="Also train with PyTorch DataLoader and compare")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -99,6 +116,7 @@ def main():
     lib.token_loader_release.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.token_loader_stop.argtypes = [ctypes.c_void_p]
 
+    torch.manual_seed(42)
     model = MiniGPT(len(stoi), args.seq_len).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=3e-3)
     params_m = sum(p.numel() for p in model.parameters()) / 1e6
@@ -106,6 +124,8 @@ def main():
 
     handle = lib.token_loader_start(str(bin_path).encode(), args.batch_size, args.seq_len, args.steps, 42)
     slot = ctypes.c_uint32()
+    if device == "cuda":
+        torch.cuda.synchronize()
     t0 = time.perf_counter()
 
     for step in range(1, args.steps + 1):
@@ -127,7 +147,43 @@ def main():
             tok_s = (step * args.batch_size * args.seq_len) / dt
             print(f"  step {step:4d}/{args.steps} | loss={loss.item():.4f} | {tok_s/1e3:7.1f}k tok/s")
 
+    if device == "cuda":
+        torch.cuda.synchronize()
+    conv_sec = time.perf_counter() - t0
     lib.token_loader_stop(handle)
+    conv_tok_s = (args.steps * args.batch_size * args.seq_len) / conv_sec
+
+    if args.compare:
+        print(f"\nTraining MiniGPT ({params_m:.2f}M params) on {device} | PyTorch DataLoader (num_workers=1)")
+        torch.manual_seed(42)
+        model_pt = MiniGPT(len(stoi), args.seq_len).to(device)
+        opt_pt = torch.optim.AdamW(model_pt.parameters(), lr=3e-3)
+        ds = TokenShardDataset(bin_path, args.seq_len, args.steps * args.batch_size)
+        loader = DataLoader(ds, batch_size=args.batch_size, num_workers=1, pin_memory=(device == "cuda"))
+        if device == "cuda":
+            torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        for step, batch in enumerate(loader, 1):
+            batch = batch.to(device, non_blocking=(device == "cuda"))
+            x, y = batch[:, :-1], batch[:, 1:]
+            logits = model_pt(x)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+            opt_pt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt_pt.step()
+            if step % max(1, args.steps // 5) == 0 or step == 1:
+                dt = time.perf_counter() - t1
+                tok_s = (step * args.batch_size * args.seq_len) / dt
+                print(f"  step {step:4d}/{args.steps} | loss={loss.item():.4f} | {tok_s/1e3:7.1f}k tok/s")
+        if device == "cuda":
+            torch.cuda.synchronize()
+        pt_sec = time.perf_counter() - t1
+        pt_tok_s = (args.steps * args.batch_size * args.seq_len) / pt_sec
+        print("\n=== End-to-End Training Comparison ===")
+        print(f"  ConveyorRing : {conv_sec:.2f}s ({conv_tok_s/1e3:.1f}k tok/s)")
+        print(f"  PyTorch DL   : {pt_sec:.2f}s ({pt_tok_s/1e3:.1f}k tok/s)")
+        print(f"  End-to-End   : {pt_sec / conv_sec:.2f}x faster")
+
     prompt = torch.tensor([[stoi["\n"]]], dtype=torch.long, device=device)
     out = model.generate(prompt, max_new_tokens=200)[0].tolist()
     print("\n--- Generated Sample ---")
