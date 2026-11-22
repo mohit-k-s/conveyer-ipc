@@ -1,8 +1,10 @@
 # Compiled binaries & build artifacts
 build/
+.venv/
 *.o
 *.out
 *.dylib
+*.so
 *.a
 head_to_head_bench
 industry_grade_verification
