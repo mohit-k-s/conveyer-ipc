@@ -9,37 +9,41 @@
 
 #if defined(__aarch64__) || defined(__arm64__)
 #define CPU_RELAX() asm volatile("yield" ::: "memory")
+inline constexpr size_t kDefaultCacheLine = 128;
 #elif defined(__x86_64__) || defined(_M_X64)
 #define CPU_RELAX() __builtin_ia32_pause()
+inline constexpr size_t kDefaultCacheLine = 64;
 #else
 #define CPU_RELAX() std::this_thread::yield()
+inline constexpr size_t kDefaultCacheLine = 64;
 #endif
 
 // ============================================================================
-// CONVEYOR-BELT SPSC RING BUFFER (APPLE SILICON 128-BYTE CACHE-FUSED)
+// CONVEYOR-BELT SPSC RING BUFFER (CACHE-LINE FUSED, ZERO SHARED HEAD/TAIL)
 //
 // Novelty:
 // 1. Zero shared index variables. Neither 'head' nor 'tail' exists in shared memory!
-// 2. Each slot is aligned and padded to 128 bytes (1 Apple Silicon Cache Line).
+// 2. Each slot is aligned and padded to CacheLine (128B on Apple Silicon, 64B on x86_64).
 // 3. The 64-bit sequence counter is fused directly into the data cache line:
 //    - Even sequence: Owned by Producer (ready to write)
 //    - Odd sequence : Owned by Consumer (ready to read)
 // 4. Hardware prefetcher friendly: strictly linear forward stride.
 // ============================================================================
 
-template <typename T, size_t Capacity = 2048>
+template <typename T, size_t Capacity = 2048, size_t CacheLine = kDefaultCacheLine>
 class ConveyorRing {
     static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
+    static_assert((CacheLine & (CacheLine - 1)) == 0 && CacheLine >= 64, "CacheLine must be a power of 2 >= 64");
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable for IPC");
     static_assert(std::atomic<uint64_t>::is_always_lock_free, "64-bit atomics must be lock-free");
     static constexpr size_t MASK = Capacity - 1;
 
 public:
-    struct alignas(128) Slot {
+    struct alignas(CacheLine) Slot {
         std::atomic<uint64_t> sequence{0};
         T data;
     };
-    static_assert(sizeof(Slot) % 128 == 0, "Slot must occupy an exact multiple of 128B cache lines");
+    static_assert(sizeof(Slot) % CacheLine == 0, "Slot must occupy an exact multiple of CacheLine");
 
 private:
     Slot slots_[Capacity];
