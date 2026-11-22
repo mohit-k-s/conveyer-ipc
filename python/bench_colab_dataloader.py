@@ -5,6 +5,7 @@ Works on both Google Colab (Linux x86_64 + CUDA GPU) and macOS (Apple Silicon).
 Usage:
     python3 python/bench_colab_dataloader.py
 """
+import argparse
 import ctypes
 from pathlib import Path
 import platform
@@ -53,6 +54,7 @@ def bench_conveyor(lib_path: Path, batch_size: int, feature_dim: int, total_batc
     t0 = time.perf_counter()
     handle = lib.loader_start(floats_per_batch, total_batches)
     checksum = 0.0
+    gpu_acc = torch.zeros((), device="cuda", dtype=torch.float64) if (HAS_TORCH and device == "cuda") else None
     count = 0
     while True:
         ptr = lib.loader_next_batch(handle, ctypes.byref(slot_idx))
@@ -65,15 +67,18 @@ def bench_conveyor(lib_path: Path, batch_size: int, feature_dim: int, total_batc
                 t = torch.from_numpy(arr)
                 if device == "cuda":
                     t = t.to("cuda", non_blocking=True)
-                checksum += float(t[0, 0])
+                    gpu_acc += t[0, 0]
+                else:
+                    checksum += float(t[0, 0])
             else:
                 checksum += float(arr[0, 0])
         else:
             checksum += float(ptr[0])
         lib.loader_release_slot(handle, slot_idx.value)
         count += 1
-    if HAS_TORCH and device == "cuda":
+    if gpu_acc is not None:
         torch.cuda.synchronize()
+        checksum = float(gpu_acc.item())
     t1 = time.perf_counter()
     lib.loader_stop(handle)
     return count, t1 - t0, checksum
@@ -186,26 +191,33 @@ def bench_pytorch_dataloader(batch_size: int, feature_dim: int, total_batches: i
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batches", type=int, default=2000)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--dim", type=int, default=128)
+    args = parser.parse_args()
+
     lib_path = build_shared_lib()
-    batch_size = 256
-    feature_dim = 128
-    total_batches = 2000
+    batch_size = args.batch_size
+    feature_dim = args.dim
+    total_batches = args.batches
+    total_gb = (total_batches * batch_size * feature_dim * 4) / (1024 ** 3)
 
     device = "cuda" if (HAS_TORCH and torch.cuda.is_available()) else "cpu"
     print(f"Platform: {platform.system()} {platform.machine()} | Device: {device}")
-    print(f"Workload: {total_batches} batches x ({batch_size}, {feature_dim}) float32")
+    print(f"Workload: {total_batches} batches x ({batch_size}, {feature_dim}) float32 ({total_gb:.2f} GiB total)")
     print("-" * 70)
 
     c_cnt, c_sec, c_sum = bench_conveyor(lib_path, batch_size, feature_dim, total_batches, device)
-    print(f"ConveyorLoader (zero-copy shm): {c_cnt/c_sec:10.1f} batches/s | {c_sec:.4f}s | checksum={c_sum:.2f}")
+    print(f"ConveyorLoader (zero-copy shm): {c_cnt/c_sec:10.1f} batches/s | {total_gb/c_sec:6.2f} GiB/s | {c_sec:.4f}s | checksum={c_sum:.2f}")
 
     if HAS_TORCH:
         s_cnt, s_sec, s_sum = bench_pytorch_shm_queue(batch_size, feature_dim, total_batches, device)
-        print(f"PyTorch share_memory_ + Queue : {s_cnt/s_sec:10.1f} batches/s | {s_sec:.4f}s | checksum={s_sum:.2f}")
+        print(f"PyTorch share_memory_ + Queue : {s_cnt/s_sec:10.1f} batches/s | {total_gb/s_sec:6.2f} GiB/s | {s_sec:.4f}s | checksum={s_sum:.2f}")
         b_cnt, b_sec, b_sum = bench_pytorch_prebatched(batch_size, feature_dim, total_batches, device)
-        print(f"PyTorch Iterable (pre-batched): {b_cnt/b_sec:10.1f} batches/s | {b_sec:.4f}s | checksum={b_sum:.2f}")
+        print(f"PyTorch Iterable (pre-batched): {b_cnt/b_sec:10.1f} batches/s | {total_gb/b_sec:6.2f} GiB/s | {b_sec:.4f}s | checksum={b_sum:.2f}")
         p_cnt, p_sec, p_sum = bench_pytorch_dataloader(batch_size, feature_dim, total_batches, device)
-        print(f"PyTorch DataLoader (standard) : {p_cnt/p_sec:10.1f} batches/s | {p_sec:.4f}s | checksum={p_sum:.2f}")
+        print(f"PyTorch DataLoader (standard) : {p_cnt/p_sec:10.1f} batches/s | {total_gb/p_sec:6.2f} GiB/s | {p_sec:.4f}s | checksum={p_sum:.2f}")
         print("-" * 70)
         print(f"Speedup vs share_memory_+Queue: {s_sec / c_sec:.2f}x faster")
         print(f"Speedup vs Pre-batched Loader : {b_sec / c_sec:.2f}x faster")
