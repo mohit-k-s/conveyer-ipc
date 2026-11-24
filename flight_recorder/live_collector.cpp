@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <mach/mach_time.h>
+#include <optional>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -69,7 +70,7 @@ static pid_t spawn_app(SharedLive* box, double ns_per_tick) {
             if (crashing) {
                 // Emit 4 more fatal pre-crash breadcrumbs then crash!
                 for (int k = 1; k <= 4; ++k) {
-                    prod.push(TraceEvent{now_ns(ns_per_tick) - base, i++, 999999, 5, 2, 24000 + k * 1500, 0, {0, 0}});
+                    prod.push(TraceEvent{now_ns(ns_per_tick) - base, i++, 999999, 5, 2, static_cast<uint64_t>(24000 + k * 1500), 0, {0, 0}});
                 }
                 raise(SIGSEGV);
                 _exit(139);
@@ -98,7 +99,8 @@ int main() {
     constexpr size_t KEEP_LAST = 80;
     std::vector<TraceEvent> tail(KEEP_LAST);
     pid_t app_pid = spawn_app(box, ns_per_tick);
-    auto cons = box->ring.make_consumer();
+    std::optional<ConveyorRing<TraceEvent, 4096>::Consumer> cons;
+    cons.emplace(box->ring.make_consumer());
 
     uint64_t captured = 0, last_captured = 0;
     bool app_alive = true;
@@ -109,7 +111,7 @@ int main() {
         // Drain available events
         TraceEvent ev{};
         int batch = 0;
-        while (batch < 4096 && cons.try_pop(ev)) {
+        while (batch < 4096 && cons->try_pop(ev)) {
             tail[captured % KEEP_LAST] = ev;
             captured++;
             batch++;
@@ -134,7 +136,7 @@ int main() {
                 last_captured = 0;
                 crash_sig = 0;
                 app_pid = spawn_app(box, ns_per_tick);
-                cons = box->ring.make_consumer();
+                cons.emplace(box->ring.make_consumer());
                 app_alive = true;
             } else if (cmd == 'q') {
                 if (app_alive) { kill(app_pid, SIGKILL); waitpid(app_pid, nullptr, 0); }
