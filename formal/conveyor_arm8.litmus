@@ -5,7 +5,7 @@ AArch64 ConveyorRing_SingleSlot_2Laps
   1:X1=data; 1:X2=seq;
   data=0; seq=0;
 }
- P0 (Producer)              | P1 (Consumer)              ;
+ P0                         | P1                         ;
  MOV W0,#1                  | LDAR W0,[X2]               ;
  STR W0,[X1]                | CMP W0,#1                  ;
  MOV W3,#1                  | B.NE L_end                 ;
