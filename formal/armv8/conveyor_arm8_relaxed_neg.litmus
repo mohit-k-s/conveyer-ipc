@@ -1,0 +1,20 @@
+AArch64 ConveyorRing_SingleSlot_2Laps_Relaxed_NegControl
+"Negative control: swapping LDAR/STLR to plain LDR/STR MUST allow stale/overwritten reads under ARMv8-A"
+{
+  0:X1=data; 0:X2=seq;
+  1:X1=data; 1:X2=seq;
+  data=0; seq=0;
+}
+ P0                         | P1                         ;
+ MOV W0,#1                  | LDR W0,[X2]                ;
+ STR W0,[X1]                | CMP W0,#1                  ;
+ MOV W3,#1                  | B.NE L_end                 ;
+ STR W3,[X2]                | LDR W4,[X1]                ;
+ LDR W5,[X2]                | MOV W5,#2                  ;
+ CMP W5,#2                  | STR W5,[X2]                ;
+ B.NE L_end0                | L_end:                     ;
+ MOV W6,#2                  |                            ;
+ STR W6,[X1]                |                            ;
+ L_end0:                    |                            ;
+exists
+(1:X0=1 /\ (1:X4=0 \/ 1:X4=2))

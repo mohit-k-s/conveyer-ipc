@@ -1,0 +1,29 @@
+# ARMv8-A Axiomatic Verification via herd7 (7.58, Rev: exported)
+# Command: herd7 formal/armv8/conveyor_arm8.litmus formal/armv8/conveyor_arm8_relaxed_neg.litmus
+
+Test ConveyorRing_SingleSlot_2Laps Allowed
+States 2
+1:X0=0; 1:X4=0;
+1:X0=1; 1:X4=1;
+No
+Witnesses
+Positive: 0 Negative: 3
+Condition exists (1:X0=1 /\ (1:X4=0 \/ 1:X4=2))
+Observation ConveyorRing_SingleSlot_2Laps Never 0 3
+Time ConveyorRing_SingleSlot_2Laps 0.03
+Hash=8b86ba080fec101992889ae392d05042
+
+Test ConveyorRing_SingleSlot_2Laps_Relaxed_NegControl Allowed
+States 4
+1:X0=0; 1:X4=0;
+1:X0=1; 1:X4=0;
+1:X0=1; 1:X4=1;
+1:X0=1; 1:X4=2;
+Ok
+Witnesses
+Positive: 3 Negative: 3
+Condition exists (1:X0=1 /\ (1:X4=0 \/ 1:X4=2))
+Observation ConveyorRing_SingleSlot_2Laps_Relaxed_NegControl Sometimes 3 3
+Time ConveyorRing_SingleSlot_2Laps_Relaxed_NegControl 0.03
+Hash=58c67189b10f29c556b0a0426defd815
+
