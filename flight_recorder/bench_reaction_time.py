@@ -104,8 +104,9 @@ def run_otel_otlp_reaction(schedule_delay_ms: int = 50):
 def main():
     print("Anomaly Reaction-Time Benchmark (Inject Spike -> Detect -> Trip Circuit Breaker)")
     print("=" * 84)
-    c_det_ns, c_rtt_ns, otlp_json = run_conveyor_agent()
     o_det_ns, _ = run_otel_otlp_reaction(schedule_delay_ms=50)
+    c_det_ns, c_rtt_ns, otlp_json = run_conveyor_agent()
+
 
     print(f"conveyor-agent (ConveyorRing shm)   : detect = {c_det_ns:8.1f} ns | trip RTT = {c_rtt_ns:8.1f} ns")
     print(f"OpenTelemetry + OTLP/HTTP (50ms)    : detect = {o_det_ns/1e6:8.2f} ms ({o_det_ns:,.0f} ns)")
